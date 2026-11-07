@@ -1,0 +1,5 @@
+# Dependencias de Python que no vienen con ROS 2 Humble (Python 3.10).
+# Probadas juntas con cv_bridge de Humble.
+mediapipe==0.10.21
+numpy<2
+opencv-contrib-python<4.12
