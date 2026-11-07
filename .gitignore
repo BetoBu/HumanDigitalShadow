@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# colcon
+build/
+install/
+log/
+
+# Modelos y datos grandes
+*.task
+*.db3
+*.mcap
+
+# Editores
+.vscode/
+.idea/
