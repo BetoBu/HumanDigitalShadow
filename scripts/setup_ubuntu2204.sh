@@ -65,7 +65,7 @@ rosdep update
 mkdir -p "$WS/src"
 if [[ -z "${SKIP_CAMERA:-}" ]]; then
   step "Dependencias del driver ros2_astra_camera"
-  sudo apt install -y libgflags-dev libgoogle-glog-dev libusb-1.0-0-dev libeigen3-dev \
+  sudo apt install -y libgflags-dev libgoogle-glog-dev libusb-1.0-0-dev libeigen3-dev nlohmann-json3-dev \
     ros-humble-image-geometry ros-humble-camera-info-manager \
     ros-humble-image-transport ros-humble-image-publisher
 
