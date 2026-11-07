@@ -1,42 +1,41 @@
 """
-Nodo de ROS 2 (Jazzy) para el human digital shadow.
+Nodo de ROS 2 (Humble) para el human digital shadow.
 
 Lee la imagen a color y la profundidad de la Orbbec Astra Pro,
-detecta el cuerpo con MediaPipe (Pose Landmarker) y publica en
-/human_skeleton un MANIQUI 3D (cilindros, esferas y cabeza)
-que se mueve como la persona, para verlo en RViz2.
+detecta el cuerpo con MediaPipe (Pose Landmarker) y publica:
+
+* /human/keypoints (geometry_msgs/PoseArray): los puntos 3D del cuerpo en el
+  marco "world" (piso), en el orden de kinematics.KEYPOINT_NAMES. Un punto que
+  no se ve llega con posicion NaN. El stamp es el de la imagen, para medir latencia.
+* /human_skeleton (visualization_msgs/MarkerArray): un MANIQUI 3D
+  (cilindros, esferas y cabeza) que se mueve como la persona, para RViz2.
+
+Marco "world": origen en el piso debajo de la camara, x hacia adelante,
+y a la izquierda, z hacia arriba. Se define con camera_height y camera_pitch_deg.
 """
 
 import math
 import os
 import time
 
+from builtin_interfaces.msg import Duration
+from cv_bridge import CvBridge
+from geometry_msgs.msg import Point, Pose, PoseArray, Quaternion
+from human_shadow.kinematics import camera_to_world, KEYPOINTS
+import mediapipe as mp
+from mediapipe.tasks import python as mp_python
+from mediapipe.tasks.python import vision
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from builtin_interfaces.msg import Duration
-from geometry_msgs.msg import Point, Quaternion
-from sensor_msgs.msg import Image, CameraInfo
+from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import ColorRGBA
 from visualization_msgs.msg import Marker, MarkerArray
-from cv_bridge import CvBridge
-
-import mediapipe as mp
-from mediapipe.tasks import python as mp_python
-from mediapipe.tasks.python import vision
 
 
-# Puntos del cuerpo que usamos (indices de MediaPipe Pose)
-JOINTS = {
-    0: "nariz",
-    11: "hombro_izq", 12: "hombro_der",
-    13: "codo_izq", 14: "codo_der",
-    15: "muneca_izq", 16: "muneca_der",
-    23: "cadera_izq", 24: "cadera_der",
-    25: "rodilla_izq", 26: "rodilla_der",
-    27: "tobillo_izq", 28: "tobillo_der",
-}
+# Puntos del cuerpo que usamos: indice de MediaPipe Pose -> nombre
+JOINTS = {idx: name for name, idx in KEYPOINTS}
 
 # Extremidades del maniqui: (punto A, punto B, radio en metros)
 LIMBS = [
@@ -82,42 +81,46 @@ def quat_from_z_to(v):
 
 
 class HumanPoseNode(Node):
+
     def __init__(self):
-        super().__init__("human_pose_node")
+        super().__init__('human_pose_node')
 
         # Parametros (se pueden cambiar con --ros-args -p nombre:=valor)
         self.declare_parameter(
-            "model_path", os.path.expanduser("~/models/pose_landmarker_full.task"))
-        self.declare_parameter("color_topic", "/camera/color/image_raw")
-        self.declare_parameter("depth_topic", "/camera/depth/image_raw")
-        self.declare_parameter("info_topic", "/camera/color/camera_info")
-        self.declare_parameter("min_visibility", 0.3)
+            'model_path', os.path.expanduser('~/models/pose_landmarker_full.task'))
+        self.declare_parameter('color_topic', '/camera/color/image_raw')
+        self.declare_parameter('depth_topic', '/camera/depth/image_raw')
+        self.declare_parameter('info_topic', '/camera/color/camera_info')
+        self.declare_parameter('min_visibility', 0.3)
         # Suavizado de la deteccion: 0 = sin suavizar, 0.9 = muy suave (con retraso)
-        self.declare_parameter("smoothing", 0.3)
+        self.declare_parameter('smoothing', 0.3)
         # Que tan rapido el maniqui "persigue" la ultima deteccion en cada redibujado
         # (0.1 = lento y muy suave, 1.0 = salta directo)
-        self.declare_parameter("follow_speed", 0.35)
+        self.declare_parameter('follow_speed', 0.35)
         # La camara mide la superficie del cuerpo; empujamos el maniqui
         # unos cm hacia atras para que quede "dentro" de la persona.
-        self.declare_parameter("body_offset", 0.06)
+        self.declare_parameter('body_offset', 0.06)
         # Segundos que el maniqui "recuerda" una parte del cuerpo que dejo de ver
-        self.declare_parameter("hold_time", 1.5)
+        self.declare_parameter('hold_time', 1.5)
         # Datos de la lente (se usan si la camara los manda en cero / sin calibrar).
         # Valores aproximados de la camara a color de la Astra Pro a 640x480.
-        self.declare_parameter("fx", 554.0)
-        self.declare_parameter("fy", 554.0)
-        self.declare_parameter("cx", 320.0)
-        self.declare_parameter("cy", 240.0)
-        # Frame en el que se dibuja el maniqui si la camara no manda uno
-        self.declare_parameter("frame_id", "camera_color_optical_frame")
+        self.declare_parameter('fx', 554.0)
+        self.declare_parameter('fy', 554.0)
+        self.declare_parameter('cx', 320.0)
+        self.declare_parameter('cy', 240.0)
+        # Donde esta la camara respecto al piso (marco "world").
+        # Mide la altura del lente al piso con el flexometro; pitch > 0 = mira hacia abajo.
+        self.declare_parameter('camera_height', 1.0)
+        self.declare_parameter('camera_pitch_deg', 0.0)
+        self.declare_parameter('world_frame', 'world')
         # Veces por segundo que se redibuja el maniqui
-        self.declare_parameter("publish_rate", 30.0)
+        self.declare_parameter('publish_rate', 30.0)
 
-        model_path = self.get_parameter("model_path").value
+        model_path = self.get_parameter('model_path').value
         if not os.path.exists(model_path):
             self.get_logger().error(
-                f"No encuentro el modelo de MediaPipe en {model_path}. "
-                "Descargalo primero (ver instrucciones).")
+                f'No encuentro el modelo de MediaPipe en {model_path}. '
+                'Descargalo primero (ver instrucciones).')
             raise FileNotFoundError(model_path)
 
         options = vision.PoseLandmarkerOptions(
@@ -130,36 +133,41 @@ class HumanPoseNode(Node):
         self.bridge = CvBridge()
         self.depth = None          # ultima imagen de profundidad
         self.K = None              # parametros de la camara (fx, fy, cx, cy)
-        self.frame_id = None       # frame de la camara a color
+        self.frame_id = None       # se fija al recibir camera_info
+        self.world_frame = self.get_parameter('world_frame').value
+        self.R, self.t = camera_to_world(
+            self.get_parameter('camera_height').value,
+            math.radians(self.get_parameter('camera_pitch_deg').value))
         self.last_ts = 0
-        self.min_vis = self.get_parameter("min_visibility").value
-        self.alpha = self.get_parameter("smoothing").value
-        self.offset = self.get_parameter("body_offset").value
+        self.min_vis = self.get_parameter('min_visibility').value
+        self.alpha = self.get_parameter('smoothing').value
+        self.offset = self.get_parameter('body_offset').value
         self.smoothed = {}         # posiciones suavizadas de cada articulacion
         self.warned_info = False
         self.last_seen = {}        # ultima vez (s) que se vio cada articulacion
-        self.hold = self.get_parameter("hold_time").value
-        self.follow = self.get_parameter("follow_speed").value
+        self.hold = self.get_parameter('hold_time').value
+        self.follow = self.get_parameter('follow_speed').value
         self.display = {}          # posiciones que se dibujan (se mueven suave)
         self.frames = 0
         self.detections = 0
         self.detect_time = 0.0
 
         self.create_subscription(
-            CameraInfo, self.get_parameter("info_topic").value,
+            CameraInfo, self.get_parameter('info_topic').value,
             self.info_cb, qos_profile_sensor_data)
         self.create_subscription(
-            Image, self.get_parameter("depth_topic").value,
+            Image, self.get_parameter('depth_topic').value,
             self.depth_cb, qos_profile_sensor_data)
         self.create_subscription(
-            Image, self.get_parameter("color_topic").value,
+            Image, self.get_parameter('color_topic').value,
             self.color_cb, qos_profile_sensor_data)
 
-        self.pub = self.create_publisher(MarkerArray, "human_skeleton", 10)
-        rate = self.get_parameter("publish_rate").value
+        self.pub = self.create_publisher(MarkerArray, 'human_skeleton', 10)
+        self.kp_pub = self.create_publisher(PoseArray, 'human/keypoints', 10)
+        rate = self.get_parameter('publish_rate').value
         self.create_timer(1.0 / rate, self.timer_cb)
         self.create_timer(5.0, self.report_cb)
-        self.get_logger().info("Nodo de pose listo. Esperando imagenes de la camara...")
+        self.get_logger().info('Nodo de pose listo. Esperando imagenes de la camara...')
 
     # ---------- callbacks ----------
 
@@ -171,22 +179,22 @@ class HumanPoseNode(Node):
             # Camara sin calibrar: usamos valores tipicos
             if not self.warned_info:
                 self.get_logger().warn(
-                    "La camara manda datos de lente en cero; uso valores por defecto "
-                    "(parametros fx, fy, cx, cy).")
+                    'La camara manda datos de lente en cero; uso valores por defecto '
+                    '(parametros fx, fy, cx, cy).')
                 self.warned_info = True
-            self.K = (self.get_parameter("fx").value, self.get_parameter("fy").value,
-                      self.get_parameter("cx").value, self.get_parameter("cy").value)
-        self.frame_id = msg.header.frame_id or self.get_parameter("frame_id").value
+            self.K = (self.get_parameter('fx').value, self.get_parameter('fy').value,
+                      self.get_parameter('cx').value, self.get_parameter('cy').value)
+        self.frame_id = self.world_frame
 
     def depth_cb(self, msg: Image):
-        self.depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
+        self.depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
 
     def color_cb(self, msg: Image):
         if self.depth is None or self.K is None:
             return
 
         rgb = np.ascontiguousarray(
-            self.bridge.imgmsg_to_cv2(msg, desired_encoding="rgb8"))
+            self.bridge.imgmsg_to_cv2(msg, desired_encoding='rgb8'))
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
         # MediaPipe en modo VIDEO necesita tiempos (ms) siempre crecientes
@@ -248,6 +256,8 @@ class HumanPoseNode(Node):
             self.smoothed[idx] = p
             self.last_seen[idx] = now
 
+        self.publish_keypoints(msg.header.stamp, now)
+
     def timer_cb(self):
         """Redibuja el maniqui a ritmo fijo con las ultimas posiciones conocidas."""
         if self.frame_id is None:
@@ -265,22 +275,44 @@ class HumanPoseNode(Node):
                 # Avanza un poco hacia la ultima deteccion: movimiento fluido
                 cur = cur + self.follow * (target - cur)
             self.display[i] = cur
-            pts[i] = cur
+            pts[i] = self.to_world(cur)
         self.publish_mannequin(pts)
 
     def report_cb(self):
         if self.frames:
             self.get_logger().info(
-                f"Procesadas: {self.frames / 5.0:.1f} img/s | "
-                f"MediaPipe tarda {1000.0 * self.detect_time / self.frames:.0f} ms por imagen | "
-                f"persona detectada en {100.0 * self.detections / self.frames:.0f}%")
+                f'Procesadas: {self.frames / 5.0:.1f} img/s | '
+                f'MediaPipe tarda {1000.0 * self.detect_time / self.frames:.0f} ms por imagen | '
+                f'persona detectada en {100.0 * self.detections / self.frames:.0f}%')
         else:
-            self.get_logger().warn("No llegan imagenes de la camara.")
+            self.get_logger().warn('No llegan imagenes de la camara.')
         self.frames = 0
         self.detections = 0
         self.detect_time = 0.0
 
     # ---------- utilidades ----------
+
+    def to_world(self, p):
+        """Punto del marco optico de la camara al marco world (piso)."""
+        return self.R @ p + self.t
+
+    def publish_keypoints(self, stamp, now):
+        """Publica los puntos 3D (marco world). Los que no se ven van en NaN."""
+        out = PoseArray()
+        out.header.stamp = stamp
+        out.header.frame_id = self.world_frame
+        nan = float('nan')
+        for _, idx in KEYPOINTS:
+            pose = Pose()
+            pose.orientation.w = 1.0
+            p = self.smoothed.get(idx)
+            if p is not None and now - self.last_seen.get(idx, 0) < self.hold:
+                w = self.to_world(p)
+                pose.position = Point(x=float(w[0]), y=float(w[1]), z=float(w[2]))
+            else:
+                pose.position = Point(x=nan, y=nan, z=nan)
+            out.poses.append(pose)
+        self.kp_pub.publish(out)
 
     def depth_at(self, u, v):
         """Profundidad en metros alrededor de un pixel (mediana de un cuadrito)."""
@@ -299,7 +331,7 @@ class HumanPoseNode(Node):
     def new_marker(self, mid, mtype, color):
         m = Marker()
         m.header.frame_id = self.frame_id   # sin hora: RViz usa la posicion mas reciente
-        m.ns = "maniqui"
+        m.ns = 'maniqui'
         m.id = mid
         m.type = mtype
         m.action = Marker.ADD
@@ -374,7 +406,7 @@ class HumanPoseNode(Node):
                 head = pts[0].copy()
             else:
                 # Si no vemos la cara, ponemos la cabeza arriba de los hombros
-                up = np.array([0.0, -1.0, 0.0])   # en la camara, "arriba" es -Y
+                up = np.array([0.0, 0.0, 1.0])    # en el marco world, "arriba" es +Z
                 if have_hips:
                     up = sh - (pts[23] + pts[24]) / 2.0
                     up /= max(np.linalg.norm(up), 1e-6)
@@ -404,5 +436,5 @@ def main(args=None):
             rclpy.shutdown()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
