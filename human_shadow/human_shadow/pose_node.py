@@ -57,8 +57,10 @@ JOINT_SIZE = {
     27: 0.09, 28: 0.09,     # tobillos / pies
 }
 
-BODY_COLOR = ColorRGBA(r=0.92, g=0.92, b=0.92, a=1.0)   # blanco tipo maniqui
-JOINT_COLOR = ColorRGBA(r=0.80, g=0.80, b=0.82, a=1.0)  # gris claro
+# Maniqui verde semitransparente: muestra lo que ve la camara y se distingue
+# del modelo de 18 articulaciones (RobotModel) que se dibuja encima.
+BODY_COLOR = ColorRGBA(r=0.20, g=0.85, b=0.35, a=0.35)
+JOINT_COLOR = ColorRGBA(r=0.10, g=0.65, b=0.25, a=0.45)
 
 
 def quat_from_z_to(v):
