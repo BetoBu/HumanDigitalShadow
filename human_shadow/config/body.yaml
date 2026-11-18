@@ -1,0 +1,28 @@
+# Medidas del modelo humano (metros).
+# Las usan el URDF (urdf/human.urdf.xacro) y la cinematica (kinematics.py),
+# asi que el modelo de Gazebo y el calculo de angulos siempre coinciden.
+# Valores de un adulto promedio; se pueden ajustar a la persona que se mide.
+body:
+  hip_half_width: 0.09        # del centro de la cadera a cada articulacion de cadera
+  torso_length: 0.50          # del centro de la cadera al centro de los hombros
+  shoulder_half_width: 0.18   # del centro de los hombros a cada hombro
+  neck_length: 0.20           # del centro de los hombros al centro de la cabeza
+  upper_arm_length: 0.30      # hombro -> codo
+  forearm_length: 0.27        # codo -> muneca
+  thigh_length: 0.43          # cadera -> rodilla
+  shank_length: 0.42          # rodilla -> tobillo
+  head_radius: 0.11
+
+# Limites de cada articulacion (radianes): [minimo, maximo].
+# Los ejes y el sentido positivo de cada angulo estan descritos en kinematics.py.
+limits:
+  torso_flex: [-0.6, 1.6]       # + = inclinarse hacia adelante
+  neck_flex: [-0.9, 0.9]        # + = cabeza hacia adelante
+  shoulder_flex: [-1.2, 3.14]   # + = brazo hacia adelante / arriba
+  shoulder_abd: [-0.8, 1.6]     # + = brazo hacia el costado (afuera)
+  shoulder_rot: [-3.14, 3.14]   # giro del brazo sobre su propio eje
+  elbow_flex: [0.0, 2.7]        # + = doblar el codo
+  hip_flex: [-0.6, 2.4]         # + = muslo hacia adelante
+  hip_abd: [-0.6, 1.2]          # + = pierna hacia afuera
+  hip_rot: [-1.2, 1.2]          # giro del muslo sobre su eje
+  knee_flex: [0.0, 2.6]         # + = doblar la rodilla

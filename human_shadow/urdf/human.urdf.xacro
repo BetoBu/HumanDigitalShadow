@@ -1,0 +1,229 @@
+<?xml version="1.0"?>
+<!--
+  Modelo humano articulado de 18 articulaciones para la sombra digital.
+
+  - Medidas y limites: config/body.yaml (los mismos que usa kinematics.py).
+  - 4 articulaciones virtuales (base_x, base_y, base_z, base_yaw) colocan al
+    cuerpo en el piso; las 18 del cuerpo estan descritas en kinematics.py.
+  - En Gazebo Fortress cada articulacion tiene un JointPositionController que
+    escucha /human/cmd/<articulacion>. El mundo no tiene gravedad, asi que el
+    modelo solo sigue los angulos que le mandamos.
+-->
+<robot name="human" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:arg name="body_config" default="$(find human_shadow)/config/body.yaml"/>
+  <xacro:arg name="gazebo" default="true"/>
+  <xacro:property name="cfg" value="${xacro.load_yaml('$(arg body_config)')}"/>
+  <xacro:property name="b" value="${cfg['body']}"/>
+  <xacro:property name="lim" value="${cfg['limits']}"/>
+
+  <!-- Velocidad maxima con la que Gazebo persigue el angulo pedido -->
+  <xacro:property name="max_ang_vel" value="20.0"/>
+  <xacro:property name="max_lin_vel" value="10.0"/>
+
+  <material name="skin"><color rgba="0.92 0.92 0.92 1"/></material>
+  <material name="joint"><color rgba="0.75 0.75 0.78 1"/></material>
+  <material name="torso"><color rgba="0.35 0.55 0.85 1"/></material>
+
+  <!-- ===================== macros ===================== -->
+
+  <!-- Inercia de un cilindro solido a lo largo de z, centrado en (0,0,zc) -->
+  <xacro:macro name="cyl_inertial" params="m r l zc">
+    <inertial>
+      <origin xyz="0 0 ${zc}"/>
+      <mass value="${m}"/>
+      <inertia ixx="${m*(3*r*r + l*l)/12}" iyy="${m*(3*r*r + l*l)/12}"
+               izz="${m*r*r/2}" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+  </xacro:macro>
+
+  <!-- Eslabon auxiliar (sin forma) entre ejes de una misma articulacion -->
+  <xacro:macro name="dummy_link" params="name">
+    <link name="${name}">
+      <inertial>
+        <mass value="0.05"/>
+        <inertia ixx="1e-4" iyy="1e-4" izz="1e-4" ixy="0" ixz="0" iyz="0"/>
+      </inertial>
+    </link>
+  </xacro:macro>
+
+  <!-- Segmento del cuerpo: cilindro desde el origen hacia z*dir, con esfera al inicio -->
+  <xacro:macro name="segment" params="name length radius mass dir:=-1 mat:=skin">
+    <link name="${name}">
+      <visual>
+        <origin xyz="0 0 ${dir*length/2}"/>
+        <geometry><cylinder radius="${radius}" length="${length}"/></geometry>
+        <material name="${mat}"/>
+      </visual>
+      <visual>
+        <geometry><sphere radius="${radius*1.25}"/></geometry>
+        <material name="joint"/>
+      </visual>
+      <xacro:cyl_inertial m="${mass}" r="${radius}" l="${length}" zc="${dir*length/2}"/>
+    </link>
+  </xacro:macro>
+
+  <xacro:macro name="joint_ctrl" params="joint max_vel">
+    <xacro:if value="$(arg gazebo)">
+      <gazebo>
+        <plugin filename="ignition-gazebo-joint-position-controller-system"
+                name="ignition::gazebo::systems::JointPositionController">
+          <joint_name>${joint}</joint_name>
+          <topic>/human/cmd/${joint}</topic>
+          <use_velocity_commands>true</use_velocity_commands>
+          <cmd_max>${max_vel}</cmd_max>
+          <cmd_min>${-max_vel}</cmd_min>
+        </plugin>
+      </gazebo>
+    </xacro:if>
+  </xacro:macro>
+
+  <xacro:macro name="rev_joint" params="name parent child axis xyz:='0 0 0' limit">
+    <joint name="${name}" type="revolute">
+      <parent link="${parent}"/>
+      <child link="${child}"/>
+      <origin xyz="${xyz}"/>
+      <axis xyz="${axis}"/>
+      <limit lower="${limit[0]}" upper="${limit[1]}" effort="1000" velocity="${max_ang_vel}"/>
+      <dynamics damping="0.1"/>
+    </joint>
+    <xacro:joint_ctrl joint="${name}" max_vel="${max_ang_vel}"/>
+  </xacro:macro>
+
+  <!-- Brazo: hombro (flex, abd, rot) + codo -->
+  <xacro:macro name="arm" params="side s">
+    <xacro:dummy_link name="${side}_shoulder_flex_link"/>
+    <xacro:dummy_link name="${side}_shoulder_abd_link"/>
+    <xacro:segment name="${side}_upper_arm" length="${b['upper_arm_length']}" radius="0.045" mass="2.0"/>
+    <xacro:segment name="${side}_forearm" length="${b['forearm_length']}" radius="0.038" mass="1.5"/>
+
+    <xacro:rev_joint name="${side}_shoulder_flex" parent="torso" child="${side}_shoulder_flex_link"
+                     xyz="0 ${s*b['shoulder_half_width']} ${b['torso_length']}" axis="0 -1 0"
+                     limit="${lim['shoulder_flex']}"/>
+    <xacro:rev_joint name="${side}_shoulder_abd" parent="${side}_shoulder_flex_link"
+                     child="${side}_shoulder_abd_link" axis="${s} 0 0" limit="${lim['shoulder_abd']}"/>
+    <xacro:rev_joint name="${side}_shoulder_rot" parent="${side}_shoulder_abd_link"
+                     child="${side}_upper_arm" axis="0 0 1" limit="${lim['shoulder_rot']}"/>
+    <xacro:rev_joint name="${side}_elbow_flex" parent="${side}_upper_arm" child="${side}_forearm"
+                     xyz="0 0 ${-b['upper_arm_length']}" axis="0 -1 0" limit="${lim['elbow_flex']}"/>
+  </xacro:macro>
+
+  <!-- Pierna: cadera (flex, abd, rot) + rodilla -->
+  <xacro:macro name="leg" params="side s">
+    <xacro:dummy_link name="${side}_hip_flex_link"/>
+    <xacro:dummy_link name="${side}_hip_abd_link"/>
+    <xacro:segment name="${side}_thigh" length="${b['thigh_length']}" radius="0.065" mass="8.0"/>
+    <xacro:segment name="${side}_shank" length="${b['shank_length']}" radius="0.05" mass="4.0"/>
+
+    <xacro:rev_joint name="${side}_hip_flex" parent="pelvis" child="${side}_hip_flex_link"
+                     xyz="0 ${s*b['hip_half_width']} 0" axis="0 -1 0" limit="${lim['hip_flex']}"/>
+    <xacro:rev_joint name="${side}_hip_abd" parent="${side}_hip_flex_link"
+                     child="${side}_hip_abd_link" axis="${s} 0 0" limit="${lim['hip_abd']}"/>
+    <xacro:rev_joint name="${side}_hip_rot" parent="${side}_hip_abd_link"
+                     child="${side}_thigh" axis="0 0 1" limit="${lim['hip_rot']}"/>
+    <xacro:rev_joint name="${side}_knee_flex" parent="${side}_thigh" child="${side}_shank"
+                     xyz="0 0 ${-b['thigh_length']}" axis="0 1 0" limit="${lim['knee_flex']}"/>
+  </xacro:macro>
+
+  <!-- ===================== base (virtual) ===================== -->
+
+  <link name="world"/>
+  <xacro:dummy_link name="base_x_link"/>
+  <xacro:dummy_link name="base_y_link"/>
+  <xacro:dummy_link name="base_z_link"/>
+
+  <joint name="base_x" type="prismatic">
+    <parent link="world"/><child link="base_x_link"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-10" upper="10" effort="10000" velocity="${max_lin_vel}"/>
+  </joint>
+  <xacro:joint_ctrl joint="base_x" max_vel="${max_lin_vel}"/>
+  <joint name="base_y" type="prismatic">
+    <parent link="base_x_link"/><child link="base_y_link"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-10" upper="10" effort="10000" velocity="${max_lin_vel}"/>
+  </joint>
+  <xacro:joint_ctrl joint="base_y" max_vel="${max_lin_vel}"/>
+  <joint name="base_z" type="prismatic">
+    <parent link="base_y_link"/><child link="base_z_link"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="3" effort="10000" velocity="${max_lin_vel}"/>
+  </joint>
+  <xacro:joint_ctrl joint="base_z" max_vel="${max_lin_vel}"/>
+  <joint name="base_yaw" type="continuous">
+    <parent link="base_z_link"/><child link="pelvis"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10000" velocity="${max_ang_vel}"/>
+  </joint>
+  <xacro:joint_ctrl joint="base_yaw" max_vel="${max_ang_vel}"/>
+
+  <!-- ===================== cuerpo ===================== -->
+
+  <link name="pelvis">
+    <visual>
+      <origin rpy="${pi/2} 0 0"/>
+      <geometry><cylinder radius="0.075" length="${2*b['hip_half_width'] + 0.1}"/></geometry>
+      <material name="torso"/>
+    </visual>
+    <inertial>
+      <mass value="10.0"/>
+      <inertia ixx="0.1" iyy="0.1" izz="0.1" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+  </link>
+
+  <link name="torso">
+    <visual>
+      <origin xyz="0 0 ${b['torso_length']/2}"/>
+      <geometry><box size="0.20 ${2*b['shoulder_half_width'] - 0.04} ${b['torso_length']}"/></geometry>
+      <material name="torso"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 ${b['torso_length']}" rpy="${pi/2} 0 0"/>
+      <geometry><cylinder radius="0.05" length="${2*b['shoulder_half_width']}"/></geometry>
+      <material name="torso"/>
+    </visual>
+    <xacro:cyl_inertial m="25.0" r="0.15" l="${b['torso_length']}" zc="${b['torso_length']/2}"/>
+  </link>
+  <xacro:rev_joint name="torso_flex" parent="pelvis" child="torso" axis="0 1 0"
+                   limit="${lim['torso_flex']}"/>
+
+  <link name="head">
+    <visual>
+      <origin xyz="0 0 ${b['neck_length']/2 - 0.02}"/>
+      <geometry><cylinder radius="0.04" length="${b['neck_length']}"/></geometry>
+      <material name="skin"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 ${b['neck_length']}"/>
+      <geometry><sphere radius="${b['head_radius']}"/></geometry>
+      <material name="skin"/>
+    </visual>
+    <!-- nariz, para ver hacia donde mira -->
+    <visual>
+      <origin xyz="${b['head_radius']} 0 ${b['neck_length'] - 0.02}"/>
+      <geometry><sphere radius="0.025"/></geometry>
+      <material name="joint"/>
+    </visual>
+    <inertial>
+      <origin xyz="0 0 ${b['neck_length']}"/>
+      <mass value="5.0"/>
+      <inertia ixx="0.025" iyy="0.025" izz="0.025" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+  </link>
+  <xacro:rev_joint name="neck_flex" parent="torso" child="head"
+                   xyz="0 0 ${b['torso_length']}" axis="0 1 0" limit="${lim['neck_flex']}"/>
+
+  <xacro:arm side="l" s="1"/>
+  <xacro:arm side="r" s="-1"/>
+  <xacro:leg side="l" s="1"/>
+  <xacro:leg side="r" s="-1"/>
+
+  <xacro:if value="$(arg gazebo)">
+    <gazebo>
+      <plugin filename="ignition-gazebo-joint-state-publisher-system"
+              name="ignition::gazebo::systems::JointStatePublisher">
+        <topic>/human/gz_joint_states</topic>
+      </plugin>
+    </gazebo>
+  </xacro:if>
+</robot>

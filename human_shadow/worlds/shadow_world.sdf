@@ -1,0 +1,82 @@
+<?xml version="1.0"?>
+<!--
+  Mundo de Gazebo Fortress para la sombra digital.
+  Sin gravedad: el modelo humano solo sigue los angulos que le mandamos.
+  El origen es el punto del piso debajo de la camara (marco "world").
+-->
+<sdf version="1.8">
+  <world name="shadow_world">
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+    <gravity>0 0 0</gravity>
+
+    <plugin filename="ignition-gazebo-physics-system"
+            name="ignition::gazebo::systems::Physics"/>
+    <plugin filename="ignition-gazebo-user-commands-system"
+            name="ignition::gazebo::systems::UserCommands"/>
+    <plugin filename="ignition-gazebo-scene-broadcaster-system"
+            name="ignition::gazebo::systems::SceneBroadcaster"/>
+
+    <scene>
+      <ambient>0.6 0.6 0.6 1</ambient>
+      <background>0.85 0.88 0.92 1</background>
+      <grid>false</grid>
+    </scene>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.4 0.2 -0.9</direction>
+    </light>
+
+    <!-- Piso -->
+    <model name="floor">
+      <static>true</static>
+      <link name="link">
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>12 12</size></plane></geometry>
+          <material>
+            <ambient>0.7 0.7 0.7 1</ambient>
+            <diffuse>0.7 0.7 0.7 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Zona de trabajo de 3 x 2 m frente a la camara (de x=1 a x=4) -->
+    <model name="work_area">
+      <static>true</static>
+      <pose>2.5 0 0.002 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>3 2 0.002</size></box></geometry>
+          <material>
+            <ambient>0.55 0.75 0.55 1</ambient>
+            <diffuse>0.55 0.75 0.55 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Marcador de la camara (en el origen, a 1 m de altura) -->
+    <model name="camera_marker">
+      <static>true</static>
+      <pose>0 0 1.0 0 0 0</pose>
+      <link name="link">
+        <visual name="body">
+          <geometry><box><size>0.05 0.18 0.04</size></box></geometry>
+          <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.1 0.1 0.1 1</diffuse></material>
+        </visual>
+        <visual name="stand">
+          <pose>0 0 -0.5 0 0 0</pose>
+          <geometry><cylinder><radius>0.01</radius><length>1.0</length></cylinder></geometry>
+          <material><ambient>0.3 0.3 0.3 1</ambient><diffuse>0.3 0.3 0.3 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>
